@@ -1,8 +1,9 @@
+#!/usr/bin/python3
+
 from OpenGL.GL import *
 from OpenGL.GLUT import *
 from OpenGL.GLU import *
 from math import  *
-#from matplotlib.pyplot import plot, ion, show
 import sys
 
 #  from pyquaternion import Quaternion    ## would be useful for 3D simulation
@@ -17,7 +18,6 @@ RAD_TO_DEG = 180.0/3.1416
 #####################################################
 #### Link class, i.e., for a rigid body
 #####################################################
-
 class Link:
     color=[0,0,0]    ## draw color
     size=[1,1,1]     ## dimensions
@@ -44,7 +44,6 @@ class Link:
 #####################################################
 #### main():   launches app
 #####################################################
-
 def main():
     global window
     global link
@@ -78,7 +77,6 @@ def main():
 #####################################################
 #### keyPressed():  called whenever a key is pressed
 #####################################################
-
 def resetSim():
     global link
     global simTime, simRun
@@ -95,7 +93,7 @@ def resetSim():
     link.omega = np.array([0.0, 0.0, 0.0])        ## radians per second
     link.izz = (link.mass * link.length**2) / 12
     link.f = np.array([0.0, 0.0, 0.0])
-    link.kinetic_energy = [0]
+    link.kinetic_energy = []
 
 #TODO: Cleanup
 '''
@@ -110,7 +108,6 @@ def resetSim():
 #####################################################
 #### keyPressed():  called whenever a key is pressed
 #####################################################
-
 def keyPressed(key,x,y):
     global simRun
     global link
@@ -137,7 +134,6 @@ def keyPressed(key,x,y):
 #####################################################
 #### SimWorld():  simulates a time step
 #####################################################
-
 def SimWorld():
     global simTime, dT, simRun
     global link
@@ -175,20 +171,25 @@ def SimWorld():
                         [r_z, 0, -r_x],
                         [-r_y, r_x, 0] ])
 
+    #costruct a (coefficient matrix) with previously made blocks.
     a = np.concatenate(
         (np.concatenate((m, np.zeros((3, 3)), -np.eye(3)), axis=1),
         np.concatenate((np.zeros((3, 3)), I, -rhat), axis=1),
         np.concatenate((-np.eye(3), rhat, np.zeros((3, 3))), axis=1)),
     axis=0)
+
+    #construct constants matrix
     b = np.array([  0, -10*link.mass, 0,
                     0, 0, 0,
                     -r_x*link.omega[2]**2, -r_y*link.omega[2]**2, 0])
+
+    #solve the linear system
     x = np.linalg.solve(a, b)
 
+    #update state
     acc = x[0:3]
     omega_dot = x[3:6]
     #### explicit Euler integration to update the state
-    #link.f += x[6:9]
     print(acc)
     link.posn += link.vel*dT
     link.vel += acc*dT
@@ -197,11 +198,11 @@ def SimWorld():
 
     simTime += dT
 
-        #### draw the updated state
+    #### draw the updated state
     DrawWorld()
     printf("simTime=%.2f\n",simTime)
 
-    current_kinetic_energy = 0.5 * (link.izz + link.mass * (link.length/2)**2) * link.omega[2]**2 
+    current_kinetic_energy = 0.5 * (link.izz + link.mass * (link.length/2)**2) * link.omega[2]**2
     link.kinetic_energy.append(current_kinetic_energy)
 
     plot_line.set_ydata(link.kinetic_energy)
@@ -216,7 +217,6 @@ def SimWorld():
 #####################################################
 #### DrawWorld():  draw the world
 #####################################################
-
 def DrawWorld():
     global link
 
@@ -232,7 +232,6 @@ def DrawWorld():
 #####################################################
 #### initGL():  does standard OpenGL initialization work
 #####################################################
-
 def InitGL(Width, Height):				# We call this right after our OpenGL window is created.
     glClearColor(1.0, 1.0, 0.9, 0.0)	# This Will Clear The Background Color To Black
     glClearDepth(1.0)					# Enables Clearing Of The Depth Buffer
@@ -249,7 +248,6 @@ def InitGL(Width, Height):				# We call this right after our OpenGL window is cr
 #####################################################
 #### ReSizeGLScene():    called when window is resized
 #####################################################
-
 def ReSizeGLScene(Width, Height):
     if Height == 0:						# Prevent A Divide By Zero If The Window Is Too Small
 	    Height = 1
@@ -262,7 +260,6 @@ def ReSizeGLScene(Width, Height):
 #####################################################
 #### DrawOrigin():  draws RGB lines for XYZ origin of coordinate system
 #####################################################
-
 def DrawOrigin():
     glLineWidth(3.0);
 
@@ -287,7 +284,6 @@ def DrawOrigin():
 #####################################################
 #### DrawCube():  draws a cube that spans from (-1,-1,-1) to (1,1,1)
 #####################################################
-
 def DrawCube():
 	glScalef(0.5,0.5,0.5);                  # dimensions below are for a 2x2x2 cube, so scale it down by a half first
 	glBegin(GL_QUADS);			# Start Drawing The Cube
@@ -372,7 +368,6 @@ def DrawCube():
 ####################################################
 # printf()
 ####################################################
-
 def printf(format, *args):
     sys.stdout.write(format % args)
 
