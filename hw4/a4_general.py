@@ -34,9 +34,9 @@ class Link:
     kinetic_energy = []
     def draw(self):      ### steps to draw a link
         glPushMatrix()                                            ## save copy of coord frame
-        glTranslatef(self.posn[0], self.posn[1], self.posn[2])    ## move
+        glTranslatef(self.posn[0]*0.5, self.posn[1]*0.5, self.posn[2]*0.5)    ## move
         glRotatef(self.theta[2]*RAD_TO_DEG,  0,0,1)                             ## rotate
-        glScale(self.size[0], self.size[1], self.size[2])         ## set size
+        glScale(self.size[0]*0.5, self.size[1]*0.5, self.size[2]*0.5)         ## set size
         glColor3f(self.color[0], self.color[1], self.color[2])    ## set colour
         DrawCube()                                                ## draw a scaled cube
         glPopMatrix()                                             ## restore old coord frame
@@ -46,12 +46,11 @@ class Link:
 #####################################################
 def main():
     global window
-    global link
-    global plot_ax, plot_line
-    global plt
+    global links, num_links
+    global plot_ax, plot_line, plt
     glutInit(sys.argv)
     glutInitDisplayMode(GLUT_RGBA | GLUT_DOUBLE | GLUT_DEPTH)     # display mode
-    glutInitWindowSize(640, 480)                                  # window size
+    glutInitWindowSize(640*2, 480*2)                                  # window size
     glutInitWindowPosition(0, 0)                                  # window coords for mouse start at top-left
     window = glutCreateWindow("CPSC 526 Simulation Template")
     glutDisplayFunc(DrawWorld)       # register the function to draw the world
@@ -69,41 +68,53 @@ def main():
     plot_line, = plot_ax.plot([0], [0])
     # https://stackoverflow.com/questions/23058560/plotting-dynamic-data-using-matplotlib
 
-    link = Link();
+    num_links=1
+    links = []
+    for count in range(num_links):
+        links.append(Link())
+
     resetSim()
 
     glutMainLoop()                   # start event processing loop
 
 #####################################################
-#### keyPressed():  called whenever a key is pressed
+#### resetSim():  Restarts the simulation
 #####################################################
 def resetSim():
-    global link
+    global links, num_links
     global simTime, simRun
 
     printf("Simulation reset\n")
     simRun = True
     simTime = 0
 
-    link.size=[0.04, 1.0, 0.12]
-    link.color=[1,0.9,0.9]
-    link.vel=np.array([0.0,0.0,0.0])
-    link.theta = np.array([0.0, 0.0, pi/4])
-    r_x = -link.length/2 * sin(link.theta[2])
-    r_y = link.length/2 * cos(link.theta[2])
-    r_z = 0.0
-    link.posn=np.array([-r_x,-r_y,-r_z])
-    link.omega = np.array([0.0, 0.0, 0.0])        ## radians per second
-    link.izz = (link.mass * link.length**2) / 12
-    link.f = np.array([0.0, 0.0, 0.0])
-    link.kinetic_energy = []
+    for idx in range(num_links):
+        link = links[idx]
+        link.size=[0.04, link.length, 0.12]
+        link.color=[1,0.9,0.9]
+        link.vel=np.array([0.0,0.0,0.0])
+        link.theta = np.array([0.0, 0.0, pi/4])
+        link.omega = np.array([0.0, 0.0, 0.0])        ## radians per second
+        link.izz = (link.mass * link.length**2) / 12
+        link.f = np.array([0.0, 0.0, 0.0])
+        link.kinetic_energy = []
+        ### Set link's position
+        r_vec = np.array([  -link.length/2 * sin(link.theta[2]),
+                            link.length/2 * cos(link.theta[2]),
+                            0.0])
+        if(idx == 0):
+            link.posn = -r_vec
+        else:
+            r_prev_vec = np.array([ -links[idx-1].length/2 * sin(links[idx-1].theta[2]),
+                                    links[idx-1].length/2 * cos(links[idx-1].theta[2]),
+                                    0.0])
+            link.posn=np.array(links[idx-1].posn - r_prev_vec - r_vec)
 
 #####################################################
 #### keyPressed():  called whenever a key is pressed
 #####################################################
 def keyPressed(key,x,y):
     global simRun
-    global link
     ch = key.decode("utf-8")
     if ch == ' ':                #### toggle the simulation
             if (simRun == True):
@@ -113,13 +124,6 @@ def keyPressed(key,x,y):
     elif ch == chr(27):          #### ESC key
             sys.exit()
     elif ch == 'q':              #### quit
-            import matplotlib.pyplot as plt
-            plt.ion()
-            #ax = plt.gca()
-            #ax.set_autoscale_on(True)
-            #line, = ax.plot(x, y)
-            plt.plot(link.kinetic_energy)
-            plt.show()
             sys.exit()
     elif ch == 'r':              #### reset simulation
             resetSim()
@@ -129,7 +133,7 @@ def keyPressed(key,x,y):
 #####################################################
 def SimWorld():
     global simTime, dT, simRun
-    global link
+    global links, numlinks
 
     # Plot variables
     global plot_ax, plot_line, plt
@@ -137,58 +141,128 @@ def SimWorld():
     if (simRun==False):             ## is simulation stopped?
             return
 
-    #construct m
-    m = np.zeros((3, 3))
-    m[0][0] = link.mass
-    m[1][1] = link.mass
+    g_const = 10
 
-    #construct I
-    I = np.zeros((3, 3))
-    I[0][0] = link.ixx
-    I[1][1] = link.iyy
-    I[2][2] = link.izz
+    a = np.zeros((9*num_links, 9*num_links))
+    b = np.zeros(9*num_links)
 
-    #construct rhat
-    r_x = -link.length/2 * sin(link.theta[2])
-    r_y = link.length/2 * cos(link.theta[2])
-    r_z = 0.0
-    rhat = np.array([   [0, -r_z, r_y],
-                        [r_z, 0, -r_x],
-                        [-r_y, r_x, 0] ])
+    for idx in range(num_links):
+        link = links[idx]
 
-    #some constants!
-    kp_stab=20  #virtual "spring"
-    kd_stab=1   #virtual "damper"
-    kd=0.1      #frictional damping constant
+        ### Some constants!
+        kp_stab=20  #virtual "spring"
+        kd_stab=1   #virtual "damper"
+        kd=0.1      #frictional damping constant
 
-    #costruct a coefficient matrix with previously made blocks.
-    a = np.concatenate(
-        (np.concatenate((m, np.zeros((3, 3)), -np.eye(3)), axis=1),
-        np.concatenate((np.zeros((3, 3)), I, -rhat), axis=1),
-        np.concatenate((-np.eye(3), rhat, np.zeros((3, 3))), axis=1)),
-    axis=0)
 
-    frictin_torque = kd*link.omega
+        ### Construct m
+        m = np.zeros((3, 3))
+        m[0][0] = link.mass
+        m[1][1] = link.mass
+        m[2][2] = link.mass
 
-    #construct constants matrix
-    stab= -kp_stab*(link.posn + np.array([r_x, r_y, r_z])) - kd_stab*(link.vel + np.array([-r_y*link.omega[2], r_x*link.omega[2], 0])) #Stabilization term
-    b = np.array([  0, -10*link.mass, 0,
-                    0, 0, 0,
-                    -r_x*link.omega[2]**2, -r_y*link.omega[2]**2, 0])
-    b[6:9] -= stab #adding Stabilization term to constraints
-    b[3:6] -= frictin_torque #adding frictional damping term to equations
 
-    #solve the linear system
+        ### Construct I
+        I = np.zeros((3, 3))
+        I[0][0] = link.ixx
+        I[1][1] = link.iyy
+        I[2][2] = link.izz
+
+
+        ### Construct rtilde and r_vec
+        r_x = -link.length/2 * sin(link.theta[2])
+        r_y = link.length/2 * cos(link.theta[2])
+        r_z = 0.0
+        r_vec = np.array([r_x, r_y, r_z])
+        rtilde = np.array([   [0, -r_z, r_y],
+                            [r_z, 0, -r_x],
+                            [-r_y, r_x, 0] ])
+
+
+        ### Construct omegatilde
+        omegatilde = np.array([ [0, -link.omega[2], link.omega[1]],
+                                [link.omega[2], 0, -link.omega[0]],
+                                [-link.omega[1], link.omega[0], 0] ])
+
+
+        ### Modify the coefficient matrix with previously made blocks.
+        #"M" part
+        M_start_idx = idx*6
+        a[M_start_idx:M_start_idx+3, M_start_idx:M_start_idx+3] = m#np.concatenate((m, np.zeros((3, 3)), -np.eye(3)), axis=1)
+
+        #"I" part
+        I_start_idx = M_start_idx+3
+        a[I_start_idx:I_start_idx+3, I_start_idx:I_start_idx+3] = I#np.concatenate((np.zeros((3, 3)), I, -rtilde), axis=1)
+
+        #Constraints part -- first 3x6 block
+        C_start_row = 6*num_links+idx*3
+        C_start_col = idx*6
+        a[C_start_row:C_start_row+3, C_start_col:C_start_col+3] = np.eye(3)
+        a[C_start_row:C_start_row+3, C_start_col+3:C_start_col+6] = -rtilde
+
+        #Constraints part -- second 3x6 block
+        C_start_row += 3
+        if C_start_row < 9*num_links:
+            a[C_start_row:C_start_row+3, C_start_col:C_start_col+3] = -np.eye(3)
+            a[C_start_row:C_start_row+3, C_start_col+3:C_start_col+6] = -rtilde
+
+        #We leave empty the last "few" columns (which are transpose of the last "few" rows) for now
+        #After all links modified a, we set that part in one shot.
+
+
+        ### Modify constants matrix
+        #"mg" part
+        mg_start_idx = idx*6
+        b[mg_start_idx+1] = -g_const*link.mass
+
+        #"-\omega * I * \omega" part
+        #it is zero in 2D
+
+        #Constraints part (this object's share!)
+        C_start_idx = 6*num_links + 3*idx
+        b[C_start_idx:C_start_idx+3] -= np.dot(omegatilde, np.dot(omegatilde, r_vec))
+        if C_start_idx+6 < 9*num_links:
+            b[C_start_idx+3:C_start_idx+6] += np.dot(omegatilde, np.dot(omegatilde, -r_vec))
+
+        # Constraint stabilization
+        CS_start_idx = 6*num_links + 3*idx
+        stab = -kp_stab*(0.0 - (link.posn+r_vec)) - kd_stab*( 0 - (link.vel + np.dot(omegatilde,r_vec)) ) #stablization term
+        if idx > 0:
+            prev = links[idx-1]
+            r_prev = np.array([ -prev.length/2 * sin(prev.theta[2]),
+                                prev.length/2 * cos(prev.theta[2]),
+                                0.0])
+            omegatilde_prev = np.array([    [0, -prev.omega[2], prev.omega[1]],
+                                            [prev.omega[2], 0, -prev.omega[0]],
+                                            [-prev.omega[1], prev.omega[0], 0] ])
+            stab = -kp_stab*( (prev.posn-r_prev) - (link.posn+r_vec) )
+            stab -= kd_stab*( (prev.vel + np.dot(omegatilde_prev,r_prev)) - (link.vel + np.dot(omegatilde,r_vec)) )
+        b[CS_start_idx:CS_start_idx+3] -= stab
+
+        #Frictional Damping
+        friction_torque = kd*link.omega
+        if idx > 0:
+            friction_torque -= kd*links[idx-1].omega
+        FD_start_idx = 6*idx+3
+        b[FD_start_idx:FD_start_idx+3] -= friction_torque
+        #if C_start_idx+6 < 9*num_links:
+        #    b[C_start_idx+3:C_start_idx+6] -= frictin_torque
+
+    a[:, num_links*6:num_links*9] = a[num_links*6:num_links*9, :].T
+
+    ### Solve the linear system
     x = np.linalg.solve(a, b)
-    #x = np.linalg.lstsq(a, b)[0]
 
-    #### explicit Euler integration to update the state
-    acc = x[0:3]
-    omega_dot = x[3:6]
-    link.posn += link.vel*dT
-    link.vel += acc*dT
-    link.theta += link.omega*dT
-    link.omega += omega_dot*dT
+    #### explicit Euler integration to update the state of each link
+    for idx in range(num_links):
+        link = links[idx]
+        offset_idx = idx*6
+        acc = x[offset_idx:offset_idx+3]
+        omega_dot = x[offset_idx+3:offset_idx+6]
+        link.posn += link.vel*dT
+        link.vel += acc*dT
+        link.theta += link.omega*dT
+        link.omega += omega_dot*dT
 
     simTime += dT
 
@@ -223,14 +297,15 @@ def SimWorld():
 #### DrawWorld():  draw the world
 #####################################################
 def DrawWorld():
-    global link
+    global links, num_links
 
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);	# Clear The Screen And The Depth Buffer
     glLoadIdentity();
     gluLookAt(1,1,3,  0,0,0,  0,1,0)
 
     DrawOrigin()
-    link.draw()
+    for idx in range(num_links):
+        links[idx].draw()
 
     glutSwapBuffers()                      # swap the buffers to display what was just drawn
 
