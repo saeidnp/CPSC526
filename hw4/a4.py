@@ -87,23 +87,16 @@ def resetSim():
 
     link.size=[0.04, 1.0, 0.12]
     link.color=[1,0.9,0.9]
-    link.posn=np.array([0.0,0.0,0.0])
     link.vel=np.array([0.0,0.0,0.0])
     link.theta = np.array([0.0, 0.0, pi/4])
+    r_x = -link.length/2 * sin(link.theta[2])
+    r_y = link.length/2 * cos(link.theta[2])
+    r_z = 0.0
+    link.posn=np.array([-r_x,-r_y,-r_z])
     link.omega = np.array([0.0, 0.0, 0.0])        ## radians per second
     link.izz = (link.mass * link.length**2) / 12
     link.f = np.array([0.0, 0.0, 0.0])
     link.kinetic_energy = []
-
-#TODO: Cleanup
-'''
-        link2.size=[0.04, 1.0, 0.12]
-        link2.color=[0.9,0.9,1.0]
-        link2.posn=np.array([1.0,0.0,0.0])
-        link2.vel=np.array([0.0,4.0,0.0])
-        link2.theta = -0.2
-        link2.omega = 0        ## radians per second
-'''
 
 #####################################################
 #### keyPressed():  called whenever a key is pressed
@@ -144,14 +137,6 @@ def SimWorld():
     if (simRun==False):             ## is simulation stopped?
             return
 
-        #### solve for the equations of motion (simple in this case!)
-    acc1 = np.array([0,-10,0])       ### linear acceleration = [0, -G, 0]
-    omega_dot1 = 0.0                 ### assume no angular acceleration
-
-        ####  for the constrained one-link pendulum, and the 4-link pendulum,
-        ####  you will want to build the equations of motion as a linear system, and then solve that.
-        ####  Here is a simple example of using numpy to solve a linear system.
-
     #construct m
     m = np.zeros((3, 3))
     m[0][0] = link.mass
@@ -166,10 +151,14 @@ def SimWorld():
     #construct rhat
     r_x = -link.length/2 * sin(link.theta[2])
     r_y = link.length/2 * cos(link.theta[2])
-    r_z = 0
+    r_z = 0.0
     rhat = np.array([   [0, -r_z, r_y],
                         [r_z, 0, -r_x],
                         [-r_y, r_x, 0] ])
+
+    #virtual "damper" and "spring" constants
+    kp=20
+    kd=1
 
     #costruct a (coefficient matrix) with previously made blocks.
     a = np.concatenate(
@@ -179,18 +168,19 @@ def SimWorld():
     axis=0)
 
     #construct constants matrix
+    stab= -kp*(link.posn + np.array([r_x, r_y, r_z])) - kd*(link.vel + np.array([-r_y*link.omega[2], r_x*link.omega[2], 0])) #Stabilization term
     b = np.array([  0, -10*link.mass, 0,
                     0, 0, 0,
                     -r_x*link.omega[2]**2, -r_y*link.omega[2]**2, 0])
+    b[6:9] -= stab #adding Stabilization term to constraints
 
     #solve the linear system
     x = np.linalg.solve(a, b)
+    #x = np.linalg.lstsq(a, b)[0]
 
-    #update state
+    #### explicit Euler integration to update the state
     acc = x[0:3]
     omega_dot = x[3:6]
-    #### explicit Euler integration to update the state
-    print(acc)
     link.posn += link.vel*dT
     link.vel += acc*dT
     link.theta += link.omega*dT
@@ -202,17 +192,28 @@ def SimWorld():
     DrawWorld()
     printf("simTime=%.2f\n",simTime)
 
+    #calculate kinetic_enery and update the history of kinetic energies in link
     current_kinetic_energy = 0.5 * (link.izz + link.mass * (link.length/2)**2) * link.omega[2]**2
     link.kinetic_energy.append(current_kinetic_energy)
 
+    '''
+    #https://stackoverflow.com/questions/20130768/retrieve-xy-data-from-matplotlib-figure
+    line = plot_ax.lines[0]
+    ydata = line.get_ydata()
+    if not ydata:
+        ydata = [current_kinetic_energy]
+    else:
+        ydata.append(current_kinetic_energy)
+    plot_line.set_ydata(ydata)
+    plot_line.set_xdata([x * dT for x in list(range(len(ydata)))])
+    '''
+
+    #plot kinetic energy versus time
     plot_line.set_ydata(link.kinetic_energy)
-    plot_line.set_xdata(list(range(len(link.kinetic_energy))))
+    plot_line.set_xdata([x * dT for x in list(range(len(link.kinetic_energy)))])
     plot_ax.relim()
     plot_ax.autoscale_view(True,True,True)
     plt.draw()
-
-    #link.kinetic_energy.append(link.kinetic_energy[-1] + 1)
-    #print(link.kinetic_energy)
 
 #####################################################
 #### DrawWorld():  draw the world
