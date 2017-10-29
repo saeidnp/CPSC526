@@ -14,8 +14,11 @@ simTime = 0
 dT = 0.01
 simRun = True
 RAD_TO_DEG = 180.0/3.1416
-num_links = 4
 g_const = 10
+resize_image = 0.25
+num_links = 4
+ground_exists = True
+ground_height = -3.75
 
 #####################################################
 #### Link class, i.e., for a rigid body
@@ -36,9 +39,9 @@ class Link:
     kinetic_energy = []
     def draw(self):      ### steps to draw a link
         glPushMatrix()                                            ## save copy of coord frame
-        glTranslatef(self.posn[0]*0.5, self.posn[1]*0.5, self.posn[2]*0.5)    ## move
+        glTranslatef(self.posn[0]*resize_image, self.posn[1]*resize_image, self.posn[2]*resize_image)    ## move
         glRotatef(self.theta[2]*RAD_TO_DEG,  0,0,1)                             ## rotate
-        glScale(self.size[0]*0.5, self.size[1]*0.5, self.size[2]*0.5)         ## set size
+        glScale(self.size[0]*resize_image, self.size[1]*resize_image, self.size[2]*resize_image)         ## set size
         glColor3f(self.color[0], self.color[1], self.color[2])    ## set colour
         DrawCube()                                                ## draw a scaled cube
         glPopMatrix()                                             ## restore old coord frame
@@ -112,24 +115,6 @@ def resetSim():
             link.posn=np.array(links[idx-1].posn - r_prev_vec - r_vec)
 
 #####################################################
-#### keyPressed():  called whenever a key is pressed
-#####################################################
-def keyPressed(key,x,y):
-    global simRun
-    ch = key.decode("utf-8")
-    if ch == ' ':                #### toggle the simulation
-            if (simRun == True):
-                 simRun = False
-            else:
-                 simRun = True
-    elif ch == chr(27):          #### ESC key
-            sys.exit()
-    elif ch == 'q':              #### quit
-            sys.exit()
-    elif ch == 'r':              #### reset simulation
-            resetSim()
-
-#####################################################
 #### SimWorld():  simulates a time step
 #####################################################
 def SimWorld():
@@ -142,16 +127,19 @@ def SimWorld():
     if (simRun==False):             ## is simulation stopped?
             return
 
-    a = np.zeros((9*num_links, 9*num_links))
-    b = np.zeros(9*num_links)
+    a = np.zeros((num_links*9, num_links*9))
+    b = np.zeros(num_links*9)
 
     for idx in range(num_links):
         link = links[idx]
+        normal_force = 0
 
         ### Some constants!
-        kp_stab=20  #virtual "spring"
-        kd_stab=1   #virtual "damper"
-        kd=0.5      #frictional damping constant
+        kp_stab = 20  #virtual "spring"
+        kd_stab = 1   #virtual "damper"
+        kp_ge_penalty = 200
+        kd_ge_penalty = kp_ge_penalty / 10
+        kd = 0.5      #frictional damping constant
 
 
         ### Construct m
@@ -183,15 +171,22 @@ def SimWorld():
                                 [link.omega[2], 0, -link.omega[0]],
                                 [-link.omega[1], link.omega[0], 0] ])
 
+        inside_the_ground = False
+        if ground_exists:
+            if link.posn[1]-abs(r_y) <= ground_height: #The link is inside the gorund
+                inside_the_ground = True
+                if idx != num_links-1:
+                    print("idx: ")
+                    print(idx)
 
         ### Modify the coefficient matrix with previously made blocks.
         #"M" part
         M_start_idx = idx*6
-        a[M_start_idx:M_start_idx+3, M_start_idx:M_start_idx+3] = m#np.concatenate((m, np.zeros((3, 3)), -np.eye(3)), axis=1)
+        a[M_start_idx:M_start_idx+3, M_start_idx:M_start_idx+3] = m
 
         #"I" part
         I_start_idx = M_start_idx+3
-        a[I_start_idx:I_start_idx+3, I_start_idx:I_start_idx+3] = I#np.concatenate((np.zeros((3, 3)), I, -rtilde), axis=1)
+        a[I_start_idx:I_start_idx+3, I_start_idx:I_start_idx+3] = I
 
         #Constraints part -- first 3x6 block (its upper link constraints)
         C_start_row = 6*num_links+idx*3
@@ -210,12 +205,32 @@ def SimWorld():
 
 
         ### Modify constants matrix
-        #"mg" part
-        mg_start_idx = idx*6
-        b[mg_start_idx+1] = -g_const*link.mass
+        newton_start_idx = idx*6
+        #Newton part ("mg" and "ground effect")
+        b[newton_start_idx+1] = -g_const*link.mass
+        #ground effect (Newton part)
+        if inside_the_ground:
+            ge_penalty = kp_ge_penalty * (link.posn[1] - r_vec[1] - ground_height)
+            ge_penalty += kd_ge_penalty * ( link.vel[1] + np.dot(omegatilde,-r_vec)[1] )
+            normal_force = ge_penalty
+            b[newton_start_idx+1] += ge_penalty
 
-        #"-\omega * I * \omega" part
-        #it is zero in 2D
+        #Euler part ("-\omega * I * \omega", "frictional damping" and "ground effect")
+        euler_start_idx = idx*6+3 #newton_start_idx+3
+        #"-\omega * I * \omega" part is zero in 2D
+
+        #Frictional Damping
+        friction_torque = -kd*link.omega
+        if idx > 0:
+            friction_torque += kd*links[idx-1].omega
+        b[euler_start_idx:euler_start_idx+3] += friction_torque
+        if euler_start_idx+6 < 6*num_links:    #frictional damping effect on the next joint
+            b[euler_start_idx+6:euler_start_idx+9] -= friction_torque
+
+        #ground effect (Euler part)
+        if inside_the_ground:
+            normal_force_vec = np.array([0, normal_force, 0])
+            b[euler_start_idx:euler_start_idx+3] += np.dot(rtilde, normal_force_vec)
 
         #Constraints part (this object's share!)
         C_start_idx = 6*num_links + 3*idx
@@ -225,7 +240,7 @@ def SimWorld():
 
         # Constraint stabilization
         CS_start_idx = 6*num_links + 3*idx
-        stab = kp_stab*(0.0 - (link.posn+r_vec)) - kd_stab*( 0 - (link.vel + np.dot(omegatilde,r_vec)) ) #stablization term
+        stab = kp_stab*(0.0 - (link.posn+r_vec)) + kd_stab*( 0 - (link.vel + np.dot(omegatilde,r_vec)) ) #stablization term
         if idx > 0:
             prev = links[idx-1]
             r_prev = np.array([ -prev.length/2 * sin(prev.theta[2]),
@@ -238,17 +253,17 @@ def SimWorld():
             stab += kd_stab*( (prev.vel + np.dot(omegatilde_prev,-r_prev)) - (link.vel + np.dot(omegatilde,r_vec)) )
         b[CS_start_idx:CS_start_idx+3] += stab
 
-        #Frictional Damping
-        friction_torque = -kd*link.omega
-        if idx > 0:
-            friction_torque += kd*links[idx-1].omega
-        FD_start_idx = 6*idx+3
-        b[FD_start_idx:FD_start_idx+3] += friction_torque
-        if FD_start_idx+6 < 6*num_links:
-            b[FD_start_idx+6:FD_start_idx+9] -= friction_torque
 
     a[:, num_links*6:num_links*9] = a[num_links*6:num_links*9, :].T
 
+    #if inside_the_ground:
+        #print(a[mat_length - 3:mat_length, 18:39])
+        #print(b)
+        #simRun = False
+        #return
+
+    #print(a)
+    #print(b)
     ### Solve the linear system
     x = np.linalg.solve(a, b)
 
@@ -293,6 +308,24 @@ def SimWorld():
     plt.draw()
 
 #####################################################
+#### keyPressed():  called whenever a key is pressed
+#####################################################
+def keyPressed(key,x,y):
+    global simRun
+    ch = key.decode("utf-8")
+    if ch == ' ':                #### toggle the simulation
+        if (simRun == True):
+             simRun = False
+        else:
+             simRun = True
+    elif ch == chr(27):          #### ESC key
+        sys.exit()
+    elif ch == 'q':              #### quit
+        sys.exit()
+    elif ch == 'r':              #### reset simulation
+        resetSim()
+
+#####################################################
 #### DrawWorld():  draw the world
 #####################################################
 def DrawWorld():
@@ -305,6 +338,8 @@ def DrawWorld():
     DrawOrigin()
     for idx in range(num_links):
         links[idx].draw()
+
+    DrawGround()
 
     glutSwapBuffers()                      # swap the buffers to display what was just drawn
 
@@ -358,6 +393,26 @@ def DrawOrigin():
     glBegin(GL_LINES)
     glVertex3f(0,0,0)
     glVertex3f(0,0,1)
+    glEnd()
+
+#####################################################
+#### DrawGround():  draws the ground
+#####################################################
+def DrawGround():
+    ground_vertices = (
+    (-100,ground_height*resize_image,50),
+    (100,ground_height*resize_image,50),
+    (-10,ground_height*resize_image,-500),
+    (10,ground_height*resize_image,-500),
+
+    )
+
+    glBegin(GL_QUADS)
+
+    for vertex in ground_vertices:
+        glColor3fv((0,0.1,0.1))
+        glVertex3fv(vertex)
+
     glEnd()
 
 #####################################################
