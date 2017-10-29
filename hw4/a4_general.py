@@ -14,6 +14,8 @@ simTime = 0
 dT = 0.01
 simRun = True
 RAD_TO_DEG = 180.0/3.1416
+num_links = 4
+g_const = 10
 
 #####################################################
 #### Link class, i.e., for a rigid body
@@ -46,7 +48,7 @@ class Link:
 #####################################################
 def main():
     global window
-    global links, num_links
+    global links
     global plot_ax, plot_line, plt
     glutInit(sys.argv)
     glutInitDisplayMode(GLUT_RGBA | GLUT_DOUBLE | GLUT_DEPTH)     # display mode
@@ -68,7 +70,6 @@ def main():
     plot_line, = plot_ax.plot([0], [0])
     # https://stackoverflow.com/questions/23058560/plotting-dynamic-data-using-matplotlib
 
-    num_links=1
     links = []
     for count in range(num_links):
         links.append(Link())
@@ -81,7 +82,7 @@ def main():
 #### resetSim():  Restarts the simulation
 #####################################################
 def resetSim():
-    global links, num_links
+    global links
     global simTime, simRun
 
     printf("Simulation reset\n")
@@ -141,8 +142,6 @@ def SimWorld():
     if (simRun==False):             ## is simulation stopped?
             return
 
-    g_const = 10
-
     a = np.zeros((9*num_links, 9*num_links))
     b = np.zeros(9*num_links)
 
@@ -152,7 +151,7 @@ def SimWorld():
         ### Some constants!
         kp_stab=20  #virtual "spring"
         kd_stab=1   #virtual "damper"
-        kd=0.1      #frictional damping constant
+        kd=0.5      #frictional damping constant
 
 
         ### Construct m
@@ -194,13 +193,13 @@ def SimWorld():
         I_start_idx = M_start_idx+3
         a[I_start_idx:I_start_idx+3, I_start_idx:I_start_idx+3] = I#np.concatenate((np.zeros((3, 3)), I, -rtilde), axis=1)
 
-        #Constraints part -- first 3x6 block
+        #Constraints part -- first 3x6 block (its upper link constraints)
         C_start_row = 6*num_links+idx*3
         C_start_col = idx*6
         a[C_start_row:C_start_row+3, C_start_col:C_start_col+3] = np.eye(3)
         a[C_start_row:C_start_row+3, C_start_col+3:C_start_col+6] = -rtilde
 
-        #Constraints part -- second 3x6 block
+        #Constraints part -- second 3x6 block (its lower link constraints)
         C_start_row += 3
         if C_start_row < 9*num_links:
             a[C_start_row:C_start_row+3, C_start_col:C_start_col+3] = -np.eye(3)
@@ -221,12 +220,12 @@ def SimWorld():
         #Constraints part (this object's share!)
         C_start_idx = 6*num_links + 3*idx
         b[C_start_idx:C_start_idx+3] -= np.dot(omegatilde, np.dot(omegatilde, r_vec))
-        if C_start_idx+6 < 9*num_links:
+        if C_start_idx+3 < 9*num_links:
             b[C_start_idx+3:C_start_idx+6] += np.dot(omegatilde, np.dot(omegatilde, -r_vec))
 
         # Constraint stabilization
         CS_start_idx = 6*num_links + 3*idx
-        stab = -kp_stab*(0.0 - (link.posn+r_vec)) - kd_stab*( 0 - (link.vel + np.dot(omegatilde,r_vec)) ) #stablization term
+        stab = kp_stab*(0.0 - (link.posn+r_vec)) - kd_stab*( 0 - (link.vel + np.dot(omegatilde,r_vec)) ) #stablization term
         if idx > 0:
             prev = links[idx-1]
             r_prev = np.array([ -prev.length/2 * sin(prev.theta[2]),
@@ -235,18 +234,18 @@ def SimWorld():
             omegatilde_prev = np.array([    [0, -prev.omega[2], prev.omega[1]],
                                             [prev.omega[2], 0, -prev.omega[0]],
                                             [-prev.omega[1], prev.omega[0], 0] ])
-            stab = -kp_stab*( (prev.posn-r_prev) - (link.posn+r_vec) )
-            stab -= kd_stab*( (prev.vel + np.dot(omegatilde_prev,r_prev)) - (link.vel + np.dot(omegatilde,r_vec)) )
-        b[CS_start_idx:CS_start_idx+3] -= stab
+            stab = kp_stab*( (prev.posn-r_prev) - (link.posn+r_vec) )
+            stab += kd_stab*( (prev.vel + np.dot(omegatilde_prev,-r_prev)) - (link.vel + np.dot(omegatilde,r_vec)) )
+        b[CS_start_idx:CS_start_idx+3] += stab
 
         #Frictional Damping
-        friction_torque = kd*link.omega
+        friction_torque = -kd*link.omega
         if idx > 0:
-            friction_torque -= kd*links[idx-1].omega
+            friction_torque += kd*links[idx-1].omega
         FD_start_idx = 6*idx+3
-        b[FD_start_idx:FD_start_idx+3] -= friction_torque
-        #if C_start_idx+6 < 9*num_links:
-        #    b[C_start_idx+3:C_start_idx+6] -= frictin_torque
+        b[FD_start_idx:FD_start_idx+3] += friction_torque
+        if FD_start_idx+6 < 6*num_links:
+            b[FD_start_idx+6:FD_start_idx+9] -= friction_torque
 
     a[:, num_links*6:num_links*9] = a[num_links*6:num_links*9, :].T
 
@@ -297,7 +296,7 @@ def SimWorld():
 #### DrawWorld():  draw the world
 #####################################################
 def DrawWorld():
-    global links, num_links
+    global links
 
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);	# Clear The Screen And The Depth Buffer
     glLoadIdentity();
